@@ -8,8 +8,10 @@ services:
       - GENERIC_TIMEZONE=Europe/Kyiv
       - TZ=Europe/Kyiv
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - WEBHOOK_URL=${WEBHOOK_URL}
     volumes:
       - n8n_data:/home/node/.n8n
 
+ 
 volumes:
   n8n_data:
