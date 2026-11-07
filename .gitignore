@@ -1,0 +1,10 @@
+# Секрети — ніколи не в git
+.env
+*.pem
+keys/
+*service-account*.json
+*-key.json
+
+# Системне сміття
+.DS_Store
+Thumbs.db
