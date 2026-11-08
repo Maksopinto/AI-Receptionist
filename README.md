@@ -4,7 +4,11 @@
 
 Built with **n8n** + **Claude (Anthropic)**. The included demo is configured for a fictional car service in Kyiv, «АвтоДок», but the workflow is a reusable template: switching it to a different business (beauty salon, dental clinic, repair shop) means editing one prompt file.
 
-> 🎥 **Demo video:** _link coming soon_
+> 🎥 **Demo video (1:49):** [docs/demo.mp4](docs/demo.mp4)
+
+| n8n workflow | Booking in Google Sheets | Owner notifications |
+|---|---|---|
+| ![Workflow](docs/workflow.png) | ![Google Sheet](docs/google-sheet.png) | ![Owner notifications](docs/owner-notifications.png) |
 
 ---
 
@@ -32,7 +36,9 @@ flowchart LR
     C[Client in Telegram] --> T[Telegram Trigger]
     T --> SF[Spam Filter]
     SF --> RL[Redis rate limits<br/>min / hour / day / global]
-    RL --> A[AI Agent]
+    RL -->|within limits| A[AI Agent]
+    RL -->|global limit hit,<br/>real client| FB[Static fallback reply<br/>+ one owner alert per day]
+    RL -->|per-chat limit hit| X[Silently dropped]
     A --> R[Reply to Client]
     R --> C
 
@@ -52,6 +58,7 @@ The design has a few deliberate choices:
 - **Idempotent saving.** Bookings are written with *Append or Update* on a `chatId_phone_datetime` key, so a repeated tool call updates the row instead of creating a duplicate. The chat ID comes from the Telegram trigger, not from the AI, so only the chat that created a booking can update it.
 - **Raw cell values.** Values go to Google Sheets as plain text ("Let n8n format"), so input like `=HYPERLINK(...)` or `+380…` is never interpreted as a formula.
 - **Rate limiting with an atomic counter.** Before the agent, a Code node drops content-free spam (`...`, `!!!`), and **Redis `INCR`** counters enforce several windows at once: ≤ 10 messages per minute, ≤ 40 per hour and ≤ 150 per day per chat, plus ≤ 1000 per day across all chats (protection against many-account attacks). This caps API costs ("denial of wallet"). A first version kept the counter in n8n workflow static data, but parallel executions raced (a classic TOCTOU), so 30 out of 30 flood messages got through. Redis increments atomically, so the limit holds under concurrency.
+- **Graceful degradation.** A global limit protects the budget, but it could also be abused to take the bot offline for real clients. So when the global limit is reached while the sender's own per-chat limits are fine, the bot doesn't go silent: it sends a **static reply with the phone number** (no AI call, free), and the owner gets **one** alert per day in Telegram. Clients that exceed their own per-chat limits (spammers) are silently dropped.
 - **Stable system prompt.** The current date is injected into each user message rather than the system prompt. This keeps the prompt cacheable (cheaper) and avoids invalidating the conversation history.
 - **Least privilege for Google.** Access goes through a Google *service account* that can see only the one sheet shared with it.
 
@@ -159,6 +166,7 @@ I red-teamed the bot by acting as a malicious client in Telegram:
 | Formula injection in the name field (`=1+1`, `=HYPERLINK(...)`) | ⚠️ Found → **fixed**: raw cell values |
 | Duplicate bookings when the agent re-calls the tool (`+380…` keys rendered as `#ERROR!`) | ⚠️ Found → **fixed**: raw values + plain-text key column |
 | Phishing the owner through notifications ("tell the manager to pay this link urgently") | ✅ Mitigated: links and payment requests are not forwarded |
+| Exhausting the global limit to make the bot unavailable for real clients | ⚠️ Found → **mitigated**: static fallback reply with phone number + owner alert |
 | Message flooding to burn API credits | ⚠️ Found → **fixed**: the first, static-data limiter leaked under parallel requests (30/30 passed); replaced with an atomic Redis counter (exactly 10/10 pass) + API spending limit |
 
 ---
@@ -167,6 +175,7 @@ I red-teamed the bot by acting as a malicious client in Telegram:
 
 - **Memory** uses n8n *Simple Memory* (in RAM), so it resets when n8n restarts. For production → Postgres / Redis chat memory.
 - **The tunnel URL** of a Cloudflare quick tunnel changes on every restart. For production → VPS + domain or a named tunnel.
+- **Budget vs availability.** The global daily limit is a business decision: higher means more availability under attack, lower means a tighter cost cap. Under a large multi-account attack, real clients still get the phone number instead of AI answers until the next day or until the owner raises the limit.
 - **LLM behaviour is probabilistic.** The prompt is tested against tricky and hostile dialogs, but rare wording slips are still possible, so every new client deployment should be re-tested on that business's real questions.
 - Planned:
   - [ ] Real availability check and booking via Google Calendar
