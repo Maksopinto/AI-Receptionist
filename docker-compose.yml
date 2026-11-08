@@ -12,6 +12,9 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
 
- 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
 volumes:
   n8n_data:
